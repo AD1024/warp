@@ -30,19 +30,25 @@ fn cmp(a: &Option<Cost>, b: &Option<Cost>) -> Ordering {
 }
 
 impl<'a, L: Language, M> Extractor<'a, L, M> {
-    pub fn new(egraph: &'a EGraph<L, M>,
-               model: fn(&L, &[Cost]) -> Cost,
-    ) -> Self {
+    pub fn new(egraph: &'a EGraph<L, M>, model: fn(&L, &[Cost]) -> Cost) -> Self {
         let costs = IndexMap::default();
-        let mut extractor = Extractor { costs, egraph, model };
+        let mut extractor = Extractor {
+            costs,
+            egraph,
+            model,
+        };
         extractor.find_costs();
 
         extractor
     }
 
     pub fn calculate_cost(&self, expr: &RecExpr<L>) -> Cost {
-        let child_costs: Vec<_> =
-            expr.as_ref().children.iter().map(|e| self.calculate_cost(e)).collect();
+        let child_costs: Vec<_> = expr
+            .as_ref()
+            .children
+            .iter()
+            .map(|e| self.calculate_cost(e))
+            .collect();
         (self.model)(&expr.as_ref().op, &child_costs)
     }
 
@@ -72,8 +78,11 @@ impl<'a, L: Language, M> Extractor<'a, L, M> {
     }
 
     fn node_total_cost(&self, node: &Expr<L, Id>) -> Option<Cost> {
-        let child_costs: Option<Vec<_>> =
-            node.children.iter().map(|id| self.costs.get(id).cloned()).collect();
+        let child_costs: Option<Vec<_>> = node
+            .children
+            .iter()
+            .map(|id| self.costs.get(id).cloned())
+            .collect();
         let cost = (self.model)(&node.op, &child_costs?);
         Some(cost)
     }
@@ -100,6 +109,10 @@ impl<'a, L: Language, M> Extractor<'a, L, M> {
     }
 
     fn make_pass(&self, eclass: &EClass<L, M>) -> Option<Cost> {
-        eclass.iter().map(|n| self.node_total_cost(n)).min_by(cmp).unwrap()
+        eclass
+            .iter()
+            .map(|n| self.node_total_cost(n))
+            .min_by(cmp)
+            .unwrap()
     }
 }

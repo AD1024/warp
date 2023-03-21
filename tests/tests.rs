@@ -1,4 +1,3 @@
-use warp::{Math, EGraph, rules, untrans_rules, trans_rules, extract, parse_hop, load_dag, optimize, print_dag};
 use egg::{
     //define_term,
     //egraph::{AddResult, EClass, Metadata},
@@ -8,11 +7,15 @@ use egg::{
     //pattern::{Applier, Rewrite, WildMap},
 };
 use log::*;
+use warp::{
+    extract, load_dag, optimize, parse_hop, print_dag, rules, trans_rules, untrans_rules, EGraph,
+    Math, MathCostFn,
+};
 
 use std::fs;
 
 fn hops() -> Vec<&'static str> {
-  vec![
+    vec![
 "/home/wopt/wormhole/systemml-perftest/hops/Kmeans-opt0-X10k_1k_dense/hops_1957793473",
 "/home/wopt/wormhole/systemml-perftest/hops/Kmeans-opt0-X10k_1k_dense/hops_93586243",
 "/home/wopt/wormhole/systemml-perftest/hops/Kmeans-opt0-X10k_1k_dense/hops_-486999781",
@@ -36,7 +39,7 @@ fn hops() -> Vec<&'static str> {
 "/home/wopt/wormhole/systemml-perftest/hops/LinearRegCG-opt0-X10k_1k_sparse01-y10k_1k_sparse01/hops_1371950232",
 "/home/wopt/wormhole/systemml-perftest/hops/LinearRegCG-opt0-X10k_1k_sparse01-y10k_1k_sparse01/hops_-1786667730",
   ]
-} 
+}
 
 #[test]
 fn opt_untrans() {
@@ -67,41 +70,39 @@ fn opt_untrans() {
         egraph.rebuild();
     }
 
-    let ext = Extractor::new(&egraph);
+    let ext = Extractor::new(&egraph, MathCostFn {});
     let best = ext.find_best(root);
 
-    println!("best is {}",best.expr.pretty(100));
+    println!("best is {}", best.expr.pretty(100));
 }
 
 //#[test]
 fn optAll() {
-for hop in hops() {
-    println!("testing {}", hop);
-    let _ = env_logger::builder().is_test(true).try_init();
-    let contents = fs::read_to_string(hop)
-        .expect("Something went wrong reading the file");
+    for hop in hops() {
+        println!("testing {}", hop);
+        let _ = env_logger::builder().is_test(true).try_init();
+        let contents = fs::read_to_string(hop).expect("Something went wrong reading the file");
 
-    let mut egraph = EGraph::default();
-    let root = load_dag(&mut egraph, &contents);
-    let sol = optimize(egraph, root);
+        let mut egraph = EGraph::default();
+        let root = load_dag(&mut egraph, &contents);
+        let sol = optimize(egraph, root);
 
-    for s in sol.iter() {
-        let sol_s = s.pretty(80);
-        println!("{}", sol_s);
+        for s in sol.iter() {
+            let sol_s = s.pretty(80);
+            println!("{}", sol_s);
+        }
+        let mut egraph = EGraph::default();
+        for s in sol.iter() {
+            egraph.add_expr(&s);
+        }
+        print_dag(&egraph);
     }
-    let mut egraph = EGraph::default();
-    for s in sol.iter() {
-        egraph.add_expr(&s);
-    }
-    print_dag(&egraph);
-}
 }
 
 #[test]
 fn opt() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let contents = fs::read_to_string("dag.hops")
-        .expect("Something went wrong reading the file");
+    let contents = fs::read_to_string("dag.hops").expect("Something went wrong reading the file");
 
     let mut egraph = EGraph::default();
     let root = load_dag(&mut egraph, &contents);
@@ -120,8 +121,7 @@ fn opt() {
 
 #[test]
 fn dag() {
-    let contents = fs::read_to_string("dag.hops")
-        .expect("Something went wrong reading the file");
+    let contents = fs::read_to_string("dag.hops").expect("Something went wrong reading the file");
 
     let mut egraph = EGraph::default();
     load_dag(&mut egraph, &contents);
@@ -157,7 +157,7 @@ fn prove_something(size_limit: usize, start: &str, goals: &[&str]) {
             egraph.number_of_classes()
         );
 
-        let ext = Extractor::new(&egraph);
+        let ext = Extractor::new(&egraph, MathCostFn {});
         let best = ext.find_best(root);
         println!("Best ({}): {}", best.cost, best.expr.pretty(40));
         let new_size = egraph.total_size();
@@ -200,11 +200,7 @@ fn lambda_avoid() {
 }
 #[test]
 fn schema() {
-    prove_something(
-        5_000,
-        "(dim k 3)",
-        &["(dim k 3)"],
-    );
+    prove_something(5_000, "(dim k 3)", &["(dim k 3)"]);
 }
 
 #[test]
@@ -244,7 +240,6 @@ fn dim_subst_fail() {
     );
 }
 
-
 #[test]
 fn pull_mul() {
     prove_something(
@@ -253,7 +248,6 @@ fn pull_mul() {
         &["(*(mat y (dim j 9) (dim k 8) (nnz 0)) (sum (dim i 10)  (mat x (dim i 9) (dim k 8) (nnz 0))))"],
     );
 }
-
 
 //#[test]
 fn push_mul() {
@@ -321,7 +315,7 @@ fn la_parrot() {
 #[test]
 fn ra_trans() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let start ="(b- i j (mat x (dim i 1000) (dim j 500) (nnz 500)))";
+    let start = "(b- i j (mat x (dim i 1000) (dim j 500) (nnz 500)))";
 
     let start_expr = Math::parse_expr(start).unwrap();
     let (mut egraph, root) = EGraph::from_expr(&start_expr);
@@ -335,10 +329,10 @@ fn ra_trans() {
     }
     egraph.dump_dot("ratrans");
 
-    let ext = Extractor::new(&egraph);
+    let ext = Extractor::new(&egraph, MathCostFn {});
     let best = ext.find_best(root);
 
-    println!("best is {}",best.expr.pretty(100));
+    println!("best is {}", best.expr.pretty(100));
     let (eg, r) = EGraph::from_expr(&best.expr);
     eg.dump_dot("la_parrot");
 }
@@ -372,10 +366,10 @@ fn ra_parrot() {
         egraph.rebuild();
     }
 
-    let ext = Extractor::new(&egraph);
+    let ext = Extractor::new(&egraph, MathCostFn {});
     let best = ext.find_best(root);
 
-    println!("best is {}",best.expr.pretty(100));
+    println!("best is {}", best.expr.pretty(100));
     let (eg, r) = EGraph::from_expr(&best.expr);
     eg.dump_dot("la_parrot");
 }
@@ -615,11 +609,11 @@ fn test_ra_bind() {
 
     let rules = untrans_rules();
     //for i in 1..13 {
-        for rw in &rules {
-            println!("APPLYING {}", rw.name);
-            rw.run(&mut egraph);
-        }
-        egraph.rebuild();
+    for rw in &rules {
+        println!("APPLYING {}", rw.name);
+        rw.run(&mut egraph);
+    }
+    egraph.rebuild();
     //}
 
     egraph.dump_dot("rabind.dot");

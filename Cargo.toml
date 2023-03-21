@@ -7,7 +7,6 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-egg = { path = "../oldegg/egg" }
 log = "0.4"
 indexmap = "1.1"
 nanoid = "0.2"
@@ -18,10 +17,20 @@ smallvec = "0.6"
 
 pest = "2.0"
 pest_derive = "2.0"
-lp-modeler = { path = "../rust-lp-modeler" }
+# lp-modeler = { path = "../rust-lp-modeler" }
 # lp-modeler = "0.4"
 bimap = "0.4"
 rand = "0.7"
+serde_json = "1.0"
+serde = "1.0.130"
+
+[dependencies.egg]
+features = ["serde-json"]
+git = "https://github.com/AD1024/egg"
+rev = "b8f902f554cc476c397e4fd9c7bea229f946d2a9"
+
+[dependencies.rplex]
+git = "https://github.com/gussmith23/rplex"
 
 # [features]
 # parent-pointers = ["egg/parent-pointers"]

@@ -1,24 +1,20 @@
-use crate::{EGraph, Math, Schema, get_vol};
+use crate::{get_vol, EGraph, Math, Schema};
 
 use egg::expr::{Expr, Id, RecExpr};
 
-use lp_modeler::solvers::{GurobiSolver, SolverTrait};
 use lp_modeler::dsl::*;
+use lp_modeler::solvers::{GurobiSolver, SolverTrait};
 
 use bimap::BiMap;
 
+use std::time::Instant;
 use std::{
-    collections::HashSet,
     collections::hash_map::DefaultHasher,
+    collections::HashSet,
     hash::{Hash, Hasher},
 };
-use std::time::Instant;
 
-pub fn extract(egraph: EGraph,
-               roots: &[Id],)
-               //cost: fn(&EGraph, &Expr<Math, Id>) -> usize)
-               -> Vec<RecExpr<Math>>
-{
+pub fn extract(egraph: EGraph, roots: &[Id]) -> Vec<RecExpr<Math>> {
     let mut problem = LpProblem::new("wormhole", LpObjective::Minimize);
 
     // Create symbolic variables Bn (for each node) & Bq (each class)
@@ -29,7 +25,7 @@ pub fn extract(egraph: EGraph,
     for c in egraph.classes() {
         // only pick if dimensions are good
         match &c.metadata.schema {
-            Some(Schema::Schm(s)) if s.len() > 2 => {},
+            Some(Schema::Schm(s)) if s.len() > 2 => {}
             _ => {
                 let bq = "bq".to_owned() + &c.id.to_string();
                 var_bqs.insert(c.id, bq);
@@ -37,17 +33,28 @@ pub fn extract(egraph: EGraph,
                 for e in c.nodes.iter() {
                     // generate variable only if e can be expressed in LA
                     match e.op {
-                        Math::Add | Math::Mul if {
-                            debug_assert_eq!(e.children.len(), 2);
-                            let x_schema = egraph[e.children[0]]
-                                .metadata.schema.as_ref().unwrap().get_schm().clone();
-                            let y_schema = egraph[e.children[1]]
-                                .metadata.schema.as_ref().unwrap().get_schm().clone();
-                            x_schema.len() == 1 && y_schema.len() == 1 && x_schema != y_schema
-                        }
-                        => {
+                        Math::Add | Math::Mul
+                            if {
+                                debug_assert_eq!(e.children.len(), 2);
+                                let x_schema = egraph[e.children[0]]
+                                    .metadata
+                                    .schema
+                                    .as_ref()
+                                    .unwrap()
+                                    .get_schm()
+                                    .clone();
+                                let y_schema = egraph[e.children[1]]
+                                    .metadata
+                                    .schema
+                                    .as_ref()
+                                    .unwrap()
+                                    .get_schm()
+                                    .clone();
+                                x_schema.len() == 1 && y_schema.len() == 1 && x_schema != y_schema
+                            } =>
+                        {
                             // row vec +/* col vec not allowed in LA
-                        },
+                        }
                         _ => {
                             let mut s = DefaultHasher::new();
                             e.hash(&mut s);
@@ -60,21 +67,24 @@ pub fn extract(egraph: EGraph,
                 }
             }
         }
-    };
-     println!("DONE generating vars");
+    }
+    println!("DONE generating vars");
 
     // Objective function to minimize
     let obj_vec: Vec<LpExpression> = {
-        var_bqs.iter().flat_map(|(c, var)| {
-            let meta = &egraph[*c].metadata;
-            if let Some(Schema::Schm(_)) = meta.schema {
-                let coef = meta.nnz.unwrap_or(get_vol(meta));
-                let bq = LpBinary::new(&var);
-                Some(coef as f32 * &bq)
-            } else {
-                None
-            }
-        }).collect()
+        var_bqs
+            .iter()
+            .flat_map(|(c, var)| {
+                let meta = &egraph[*c].metadata;
+                if let Some(Schema::Schm(_)) = meta.schema {
+                    let coef = meta.nnz.unwrap_or(get_vol(meta));
+                    let bq = LpBinary::new(&var);
+                    Some(coef as f32 * &bq)
+                } else {
+                    None
+                }
+            })
+            .collect()
     };
 
     println!("so many vars {:?}", obj_vec.len());
@@ -99,11 +109,13 @@ pub fn extract(egraph: EGraph,
         if let Some(bq_s) = &var_bqs.get_by_left(&class.id) {
             let bq = LpBinary::new(bq_s);
             // Gq <=> (1-Bq) + (sum Bn) > 0
-            let bns: Vec<&String> = class.nodes.iter().filter_map(|n| {
-                var_bns.get_by_left(&n)
-            }).collect();
+            let bns: Vec<&String> = class
+                .nodes
+                .iter()
+                .filter_map(|n| var_bns.get_by_left(&n))
+                .collect();
             if bns.is_empty() {
-                problem += (0+bq).equal(0);
+                problem += (0 + bq).equal(0);
             } else {
                 let sum_bn = sum(&bns, |n| LpBinary::new(&n));
                 problem += (1 - bq + sum_bn).ge(1);
@@ -154,14 +166,17 @@ pub fn extract(egraph: EGraph,
         }
     }
     println!("SELECTED COST {:?}", cost);
-    roots.iter().map(|root| find_expr(&egraph, *root, &selected)).collect()
+    roots
+        .iter()
+        .map(|root| find_expr(&egraph, *root, &selected))
+        .collect()
 }
 
 fn find_expr(egraph: &EGraph, class: Id, selected: &HashSet<&Expr<Math, Id>>) -> RecExpr<Math> {
     println!("CLASS {:?}", class);
     let eclass = egraph.find(class);
     for n in egraph[class].iter() {
-      println!("NODE {:?}", n);
+        println!("NODE {:?}", n);
     }
     let best_node = egraph[eclass]
         .iter()
