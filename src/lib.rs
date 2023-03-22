@@ -1,10 +1,9 @@
-use egg::{define_language, EClass, Id, Language, RecExpr, Rewrite};
-
+use egg::{define_language, Id, Language, RecExpr, Runner};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::iter::*;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rand::seq::SliceRandom;
 
@@ -12,17 +11,15 @@ use ordered_float::NotNan;
 
 use log::*;
 
-mod translate;
-pub use translate::Extractor;
-
 mod hop;
 pub use hop::*;
 
+mod extractors;
+use extractors::*;
+use MaxSATExtract::MaxsatCostFunction;
+
 mod rules;
 pub use rules::{rules, trans_rules, untrans_rules};
-
-mod extract;
-pub use extract::*;
 
 pub type EGraph = egg::EGraph<Math, Meta>;
 
@@ -35,6 +32,16 @@ pub struct Meta {
     nnz: Option<usize>,
 }
 
+impl Default for Meta {
+    fn default() -> Self {
+        Meta {
+            schema: None,
+            sparsity: None,
+            nnz: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Schema {
     Schm(HashMap<String, usize>),
@@ -45,8 +52,28 @@ pub enum Schema {
 }
 
 pub struct MathCostFn;
+impl extractors::MaxSATExtract::MaxsatCostFunction<Math, Meta> for MathCostFn {
+    fn node_cost(&mut self, egraph: &egg::EGraph<Math, Meta>, eclass: Id, enode: &Math) -> f64 {
+        match enode {
+            Math::LMat(_)
+            | Math::LAdd(_)
+            | Math::LMin(_)
+            | Math::LMul(_)
+            | Math::MMul(_)
+            | Math::LTrs(_)
+            | Math::Srow(_)
+            | Math::Scol(_)
+            | Math::Sall(_)
+            | Math::LLit(_)
+            | Math::Sub(_) => 100.0,
+            Math::Bind(_) | Math::Ubnd(_) => 10.0,
+            _ => 1.0,
+        }
+    }
+}
 impl egg::CostFunction<Math> for MathCostFn {
-    fn cost<C>(&mut self, enode: &Math, costs: C) -> Self::Cost
+    type Cost = f32;
+    fn cost<C>(&mut self, enode: &Math, mut costs: C) -> Self::Cost
     where
         C: FnMut(Id) -> Self::Cost,
     {
@@ -72,9 +99,9 @@ impl egg::CostFunction<Math> for MathCostFn {
 pub fn dag_cost(eg: &EGraph) -> usize {
     eg.classes()
         .map(|c| {
-            let nnz = c.metadata.nnz;
-            if let Some(Schema::Schm(_)) = c.metadata.schema {
-                nnz.unwrap_or(get_vol(&c.metadata))
+            let nnz = c.data.nnz;
+            if let Some(Schema::Schm(_)) = c.data.schema {
+                nnz.unwrap_or(get_vol(&c.data))
             } else {
                 0
             }
@@ -82,57 +109,57 @@ pub fn dag_cost(eg: &EGraph) -> usize {
         .sum()
 }
 
-fn saturate(egraph: &mut EGraph, rws: &[Rewrite<Math, Meta>], iters: usize, randomize: bool) {
-    let mut rng = rand::thread_rng();
-    let limit = 8000000;
-    let start_time = Instant::now();
-    'outer: for i in 1..iters {
-        info!("\n\nIteration {}\n", i);
-        let search_time = Instant::now();
-        let mut applied = 0;
-        let mut matches = Vec::new();
-        for rw in rws {
-            let ms = rw.search(&egraph);
-            if !ms.is_empty() {
-                matches.push(ms);
-            }
-        }
-        info!("Search time: {:?}", search_time.elapsed());
-        let match_time = Instant::now();
-        for m in matches {
-            let actually_matched = if randomize {
-                m.apply_random(egraph, limit, 5, &mut rng).len()
-            } else {
-                m.apply_with_limit(egraph, limit).len()
-            };
-            if egraph.total_size() > limit {
-                error!("Node limit exceeded. {} > {}", egraph.total_size(), limit);
-                break 'outer;
-            }
+// fn saturate(egraph: &mut EGraph, rws: &[Rewrite<Math, Meta>], iters: usize, randomize: bool) {
+//     let mut rng = rand::thread_rng();
+//     let limit = 8000000;
+//     let start_time = Instant::now();
+//     'outer: for i in 1..iters {
+//         info!("\n\nIteration {}\n", i);
+//         let search_time = Instant::now();
+//         let mut applied = 0;
+//         let mut matches = Vec::new();
+//         for rw in rws {
+//             let ms = rw.search(&egraph);
+//             if !ms.is_empty() {
+//                 matches.push(ms);
+//             }
+//         }
+//         info!("Search time: {:?}", search_time.elapsed());
+//         let match_time = Instant::now();
+//         for m in matches {
+//             let actually_matched = if randomize {
+//                 m.apply_random(egraph, limit, 5, &mut rng).len()
+//             } else {
+//                 m.apply_with_limit(egraph, limit).len()
+//             };
+//             if egraph.total_size() > limit {
+//                 error!("Node limit exceeded. {} > {}", egraph.total_size(), limit);
+//                 break 'outer;
+//             }
 
-            applied += actually_matched;
-            if actually_matched > 0 {
-                info!("Applied {} {} times", m.rewrite.name, actually_matched);
-            }
-        }
-        info!("Match time: {:?}", match_time.elapsed());
-        let rebuild_time = Instant::now();
-        egraph.rebuild();
-        info!("Rebuild time: {:?}", rebuild_time.elapsed());
-        info!(
-            "Size: n={}, e={}",
-            egraph.total_size(),
-            egraph.number_of_classes()
-        );
+//             applied += actually_matched;
+//             if actually_matched > 0 {
+//                 info!("Applied {} {} times", m.rewrite.name, actually_matched);
+//             }
+//         }
+//         info!("Match time: {:?}", match_time.elapsed());
+//         let rebuild_time = Instant::now();
+//         egraph.rebuild();
+//         info!("Rebuild time: {:?}", rebuild_time.elapsed());
+//         info!(
+//             "Size: n={}, e={}",
+//             egraph.total_size(),
+//             egraph.number_of_classes()
+//         );
 
-        if applied == 0 {
-            info!("Stopping early!");
-            break;
-        }
-    }
-    let rules_time = start_time.elapsed();
-    info!("Rules time: {:?}", rules_time);
-}
+//         if applied == 0 {
+//             info!("Stopping early!");
+//             break;
+//         }
+//     }
+//     let rules_time = start_time.elapsed();
+//     info!("Rules time: {:?}", rules_time);
+// }
 
 pub fn udf_meta(op: &str, children: &[&Meta]) -> Meta {
     match op {
@@ -275,34 +302,179 @@ pub fn udf_meta(op: &str, children: &[&Meta]) -> Meta {
     }
 }
 
-pub fn optimize(lgraph: EGraph, roots: Vec<u32>) -> Vec<RecExpr<Math>> {
+fn extract_with_ilp_topo(
+    root: egg::Id,
+    egraph: &egg::EGraph<Math, Meta>,
+) -> (u128, u128, egg::RecExpr<Math>) {
+    println!("Extract using ILP-Topo");
+    let mut cost_fn = MathCostFn {};
+    let cplex_env = rplex::Env::new().unwrap();
+    let start = Instant::now();
+    let mut problem =
+        ILPExtract::create_problem(&cplex_env, root, &egraph, true, true, move |x, y, z| {
+            cost_fn.node_cost(x, y, z)
+        });
+    let (solve_time, _, best) = problem.solve();
+    let elapsed = start.elapsed().as_millis();
+    return (solve_time, elapsed, best);
+}
+
+fn extract_with_ilp_acyc(
+    root: egg::Id,
+    egraph: &egg::EGraph<Math, Meta>,
+) -> (u128, u128, egg::RecExpr<Math>) {
+    println!("Extract using ILP-ACyc");
+    let mut cost_fn = MathCostFn {};
+    let cplex_env = rplex::Env::new().unwrap();
+    let start = Instant::now();
+    let mut problem =
+        ILPExtract::create_problem(&cplex_env, root, &egraph, true, false, move |x, y, z| {
+            cost_fn.node_cost(x, y, z)
+        });
+    let (solve_time, _, best) = problem.solve();
+    let elapsed = start.elapsed().as_millis();
+    return (solve_time, elapsed, best);
+}
+
+fn extract_with_maxsat(
+    root: egg::Id,
+    egraph: &egg::EGraph<Math, Meta>,
+) -> (u128, u128, Option<f64>, egg::RecExpr<Math>) {
+    println!("Extract using WPMAXSAT");
+    let mut maxsat_ext = MaxSATExtract::MaxsatExtractor::new(&egraph, "problem.wcnf".into());
+    let start = Instant::now();
+    let mut problem = maxsat_ext.create_problem(root, "problem", true, MathCostFn);
+    let (solve_time, cost, best) = problem.solve_with_refinement();
+    let elapsed = start.elapsed().as_millis();
+    return (solve_time, elapsed, cost, best);
+}
+
+fn get_best_exprs(
+    egraph: &egg::EGraph<Math, Meta>,
+    roots: &Vec<Id>,
+    maxsat_extract: bool,
+    ilp_topo: bool,
+    ilp_acyc: bool,
+    solver_time: &mut u128,
+    extract_time: &mut u128,
+) -> Vec<RecExpr<Math>> {
+    let mut rplans = Vec::new();
+    if maxsat_extract {
+        println!("Extract using WPMAXSAT");
+        for r in roots.iter() {
+            let (solve_time, elapsed, _, best) = extract_with_maxsat(*r, &egraph);
+            *extract_time += elapsed;
+            *solver_time += solve_time;
+            rplans.push(best);
+        }
+    } else if ilp_topo {
+        println!("Extract using ILP-Topo");
+        for r in roots.iter() {
+            let (solve_time, elapsed, best) = extract_with_ilp_topo(*r, &egraph);
+            *extract_time += elapsed;
+            *solver_time += solve_time;
+            rplans.push(best);
+        }
+    } else if ilp_acyc {
+        println!("Extract using ILP-ACyc");
+        for r in roots.iter() {
+            let (solve_time, elapsed, best) = extract_with_ilp_acyc(*r, &egraph);
+            *extract_time += elapsed;
+            *solver_time += solve_time;
+            rplans.push(best);
+        }
+    } else {
+        println!("Extract using Greedy");
+        for r in roots.iter() {
+            let start = Instant::now();
+            let extractor = egg::Extractor::new(&egraph, MathCostFn);
+            let (_, best) = extractor.find_best(*r);
+            let elapsed = start.elapsed().as_millis();
+            *extract_time += elapsed;
+            *solver_time += elapsed;
+            rplans.push(best);
+        }
+    }
+    return rplans;
+}
+
+pub fn optimize(
+    lgraph: EGraph,
+    roots: &Vec<Id>,
+    maxsat_extract: bool,
+    ilp_topo: bool,
+    ilp_acyc: bool,
+) -> Vec<RecExpr<Math>> {
     // Translate LA plan to RA
     println!("Translate LA plan to RA");
     let start_time = Instant::now();
     let (mut trans_graph, roots) = (lgraph, roots);
-    saturate(&mut trans_graph, &trans_rules().as_ref(), 27, false);
-    let trans_ext = Extractor::new(&trans_graph, MathCostFn {});
-    let rplans: Vec<_> = roots.iter().map(|r| trans_ext.find_best(*r).expr).collect();
+    // saturate(&mut trans_graph, &trans_rules().as_ref(), 27, false);
+    let runner = Runner::<_, _, ()>::new(Meta {
+        schema: None,
+        sparsity: None,
+        nnz: None,
+    })
+    .with_egraph(trans_graph)
+    .with_iter_limit(27)
+    .with_time_limit(Duration::from_secs(10));
+    let runner = runner.run(&trans_rules());
+    // let trans_ext = Extractor::new(&trans_graph, MathCostFn {});
+    let mut extract_time = 0;
+    let mut solver_time = 0;
+
+    let rplans: Vec<_> = get_best_exprs(
+        &runner.egraph,
+        roots,
+        maxsat_extract,
+        ilp_topo,
+        ilp_acyc,
+        &mut solver_time,
+        &mut extract_time,
+    );
     let trans_time = start_time.elapsed();
     println!("TRANS TIME {:?}", trans_time);
-    for rp in rplans.iter() {
-        println!("{}", rp.pretty(80));
-    }
+    println!("EXTRACT TIME {:?}", extract_time);
+    // for rp in rplans.iter() {
+    //     println!("{}", rp.pretty(80));
+    // }
     // Optimize RA plan
     println!("Optimize RA plan");
     let start_time = Instant::now();
-    let mut opt_graph = EGraph::default();
+    let mut opt_graph = EGraph::new(Meta {
+        schema: None,
+        sparsity: None,
+        nnz: None,
+    });
     let opt_roots: Vec<_> = rplans.iter().map(|rp| opt_graph.add_expr(rp)).collect();
     let orig_cost = dag_cost(&opt_graph);
+    println!("Original cost: {}", orig_cost);
     //println!("ROOT {:?}", opt_roots);
-    saturate(&mut opt_graph, &rules().as_ref(), 17, true);
+    // saturate(&mut opt_graph, &rules().as_ref(), 17, true);
+    let runner = Runner::<_, _, ()>::new(Meta {
+        schema: None,
+        sparsity: None,
+        nnz: None,
+    })
+    .with_egraph(opt_graph)
+    .with_iter_limit(27)
+    .with_time_limit(Duration::from_secs(10));
+    let runner = runner.run(&rules());
     let sat_time = start_time.elapsed();
     println!("SAT TIME {:?}", sat_time);
     println!("DONE SATURATING");
 
     let start_time = Instant::now();
-    let ext = Extractor::new(&opt_graph, MathCostFn {});
-    let bests = opt_roots.iter().map(|r| ext.find_best(*r).expr).collect();
+    // let ext = Extractor::new(&opt_graph, MathCostFn {});
+    let bests = get_best_exprs(
+        &runner.egraph,
+        &opt_roots,
+        maxsat_extract,
+        ilp_topo,
+        ilp_acyc,
+        &mut solver_time,
+        &mut extract_time,
+    );
     let solv_time = start_time.elapsed();
     println!("SOLVE TIME {:?}", solv_time);
 
@@ -381,29 +553,47 @@ impl Schema {
 }
 
 impl egg::Analysis<Math> for Meta {
-    fn modify(_eclass: &mut EClass<Math, Self>) {}
-    fn merge(&self, other: &Self) -> Self {
-        let sparsity = [self.sparsity, other.sparsity]
+    type Data = Meta;
+
+    fn merge(&self, a: &mut Self::Data, b: Self::Data) -> Option<std::cmp::Ordering> {
+        let sparsity = [a.sparsity, b.sparsity]
             .into_iter()
             .flatten()
             .min()
             .copied();
-        let nnz = [self.nnz, other.nnz].into_iter().flatten().min().copied();
-        debug_assert_eq!(&self.schema, &other.schema);
-        let schema = self.schema.clone();
-        Meta {
+        let nnz = [a.nnz, b.nnz].into_iter().flatten().min().copied();
+        debug_assert_eq!(&a.schema, &b.schema);
+        let schema = a.schema.clone();
+        *a = Meta {
             schema,
             sparsity,
             nnz,
-        }
+        };
+        Some(std::cmp::Ordering::Equal)
     }
+
+    // fn merge(&self, other: &Self) -> Option<> {
+    //     let sparsity = [self.sparsity, other.sparsity]
+    //         .into_iter()
+    //         .flatten()
+    //         .min()
+    //         .copied();
+    //     let nnz = [self.nnz, other.nnz].into_iter().flatten().min().copied();
+    //     debug_assert_eq!(&self.schema, &other.schema);
+    //     let schema = self.schema.clone();
+    //     Meta {
+    //         schema,
+    //         sparsity,
+    //         nnz,
+    //     }
+    // }
 
     fn make(egraph: &egg::EGraph<Math, Meta>, enode: &Math) -> Self {
         let schema = match enode {
             Math::Ind([lhs, rhs]) => {
                 debug_assert_eq!(enode.children().len(), 2, "wrong length in mul");
-                let x = &(egraph[*lhs].data as Meta);
-                let y = &(egraph[*rhs].data as Meta);
+                let x = &egraph[*lhs].data;
+                let y = &egraph[*rhs].data;
 
                 let mut schema = x.schema.as_ref().unwrap().get_schm().clone();
                 let y_schema = y.schema.as_ref().unwrap().get_schm().clone();
@@ -607,8 +797,8 @@ impl egg::Analysis<Math> for Meta {
             },
             Math::Num(n) => Meta {
                 schema: Some(Schema::Size(n.into_inner().round() as usize)),
-                nnz: Some(if n == 0.0.into() { 0 } else { 1 }),
-                sparsity: Some(if n == 0.0.into() {
+                nnz: Some(if n == &NotNan::from(0.0) { 0 } else { 1 }),
+                sparsity: Some(if n == &NotNan::from(0.0) {
                     0.0.into()
                 } else {
                     1.0.into()
@@ -623,15 +813,15 @@ impl egg::Analysis<Math> for Meta {
                 }
             }
             Math::Str(s) => Meta {
-                schema: Some(Schema::Name(s)),
+                schema: Some(Schema::Name(s.clone())),
                 nnz: Some(1),
                 sparsity: Some(1.0.into()),
             },
             // Schema rules for LA plans
             Math::Udf(ch) => {
                 let op_s = expr_schema(egraph, &ch[0]).get_name();
-                let args = ch[1..].iter().map(|c| expr_schema(egraph, c)).collect();
-                udf_meta(op_s, args)
+                let args = ch[1..].iter().map(|c| &egraph[*c].data).collect::<Vec<_>>();
+                udf_meta(op_s, args.as_slice())
             }
             Math::LMat([x, i, j, z]) => {
                 // debug_assert_eq!(enode.children().len(), 4, "wrong length in lmat");
@@ -777,7 +967,7 @@ impl egg::Analysis<Math> for Meta {
     }
 }
 
-fn expr_schema<'a>(egraph: &egg::EGraph<Math, Meta>, eclass: &Id) -> &'a Schema {
+fn expr_schema<'a>(egraph: &'a egg::EGraph<Math, Meta>, eclass: &Id) -> &'a Schema {
     // expr.children[i].schema.as_ref().unwrap()
     egraph[*eclass].data.schema.as_ref().unwrap()
 }
@@ -790,8 +980,7 @@ fn dims_ok(x_i: usize, x_j: usize, y_i: usize, y_j: usize) {
             || (x_i == 1 && x_j == y_j)
             || (y_i == 1 && x_j == y_j)
             || (x_i == 1 && x_j == 1)
-            || (y_i == 1 && y_j == 1),
-        &format!("{:?}", (x_i, x_j, y_i, y_j))
+            || (y_i == 1 && y_j == 1)
     );
 }
 
@@ -803,24 +992,24 @@ define_language! {
         "l-" = LMin([Id; 2]),
         "l*" = LMul([Id; 2]),
         "m*" = MMul([Id; 2]),
-        "trans" = LTrs([Id]),
-        "srow" = Srow([Id]),
-        "scol" = Scol([Id]),
-        "sall" = Sall([Id]),
+        "trans" = LTrs([Id; 1]),
+        "srow" = Srow([Id; 1]),
+        "scol" = Scol([Id; 1]),
+        "sall" = Sall([Id; 1]),
         "b+" = Bind([Id; 3]),
         "b-" = Ubnd([Id; 3]),
-        "llit" = LLit([Id]),
+        "llit" = LLit([Id; 1]),
         "udf" = Udf(Vec<Id>),
         //RA
         "+" = Add([Id; 2]),
         "*" = Mul([Id; 2]),
         "sum" = Agg([Id; 2]),
         "rm*" = RMMul([Id; 2]),
-        "lit" = Lit([Id]),
-        "var" = Var([Id]),
+        "lit" = Lit([Id; 1]),
+        "var" = Var([Id; 1]),
         "mat" = Mat([Id; 4]),
         "dim" = Dim([Id; 2]),
-        "nnz" = Nnz([Id]),
+        "nnz" = Nnz([Id; 1]),
         "subst" = Sub([Id; 3]),
         "ind" = Ind([Id; 2]),
         Num(Number),

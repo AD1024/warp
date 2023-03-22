@@ -2,14 +2,13 @@ use egg::{
     //define_term,
     //egraph::{AddResult, EClass, Metadata},
     //expr::{Expr, Language, QuestionMarkName},
-    extract::{calculate_cost, Extractor},
-    parse::ParsableLanguage,
-    //pattern::{Applier, Rewrite, WildMap},
+    Extractor,
+    Runner,
 };
 use log::*;
 use warp::{
-    extract, load_dag, optimize, parse_hop, print_dag, rules, trans_rules, untrans_rules, EGraph,
-    Math, MathCostFn,
+    load_dag, optimize, parse_hop, print_dag, rules, trans_rules, untrans_rules, EGraph, Math,
+    MathCostFn, Meta,
 };
 
 use std::fs;
@@ -59,24 +58,30 @@ fn opt_untrans() {
     //          (mat C (dim _ 1) (dim vmmul_j72386 500000) (nnz 500000))))))
     //  )";
 
-    let start_expr = Math::parse_expr(start).unwrap();
-    let (mut egraph, root) = EGraph::from_expr(&start_expr);
+    let start_expr = start.parse().unwrap();
+    let mut egraph = EGraph::new(Meta::default());
+    let root = egraph.add_expr(&start_expr);
 
     let tr = untrans_rules();
-    for _i in 1..50 {
-        for rw in &tr {
-            rw.run(&mut egraph);
-        }
-        egraph.rebuild();
-    }
+    let runner = Runner::<_, _, ()>::new(Meta::default())
+        .with_egraph(egraph)
+        .with_iter_limit(50);
+    let runner = runner.run(&tr);
+    // for _i in 1..50 {
+    //     for rw in &tr {
+    //         rw.run(&mut egraph);
+    //     }
+    //     egraph.rebuild();
+    // }
 
-    let ext = Extractor::new(&egraph, MathCostFn {});
+    let ext = Extractor::new(&runner.egraph, MathCostFn {});
     let best = ext.find_best(root);
 
-    println!("best is {}", best.expr.pretty(100));
+    println!("best is {}", best.1.pretty(100));
 }
 
 //#[test]
+/*
 fn optAll() {
     for hop in hops() {
         println!("testing {}", hop);
@@ -85,7 +90,7 @@ fn optAll() {
 
         let mut egraph = EGraph::default();
         let root = load_dag(&mut egraph, &contents);
-        let sol = optimize(egraph, root);
+        let sol = optimize(egraph, &root, true, false, false);
 
         for s in sol.iter() {
             let sol_s = s.pretty(80);
@@ -97,7 +102,7 @@ fn optAll() {
         }
         print_dag(&egraph);
     }
-}
+} */
 
 #[test]
 fn opt() {
@@ -106,7 +111,7 @@ fn opt() {
 
     let mut egraph = EGraph::default();
     let root = load_dag(&mut egraph, &contents);
-    let sol = optimize(egraph, root);
+    let sol = optimize(egraph, &root, true, false, false);
 
     for s in sol.iter() {
         let sol_s = s.pretty(80);
@@ -119,15 +124,15 @@ fn opt() {
     print_dag(&egraph);
 }
 
-#[test]
-fn dag() {
-    let contents = fs::read_to_string("dag.hops").expect("Something went wrong reading the file");
+// #[test]
+// fn dag() {
+//     let contents = fs::read_to_string("dag.hops").expect("Something went wrong reading the file");
 
-    let mut egraph = EGraph::default();
-    load_dag(&mut egraph, &contents);
+//     let mut egraph = EGraph::default();
+//     load_dag(&mut egraph, &contents);
 
-    egraph.dump_dot("dag.dot");
-}
+//     egraph.dump_dot("dag.dot");
+// }
 
 static HOP: &str = "9,29;82;b(*);83,84;0,0,-1,-1,-1;S;D;0,0,0,0;;CP;";
 
@@ -140,51 +145,53 @@ fn phop() {
 fn prove_something(size_limit: usize, start: &str, goals: &[&str]) {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let start_expr = Math::parse_expr(start).unwrap();
-    println!("Start ({}): {}", calculate_cost(&start_expr), start);
+    let start_expr = start.parse().unwrap();
+    // println!("Start ({}): {}", calculate_cost(&start_expr), start);
 
-    let goal_exprs: Vec<_> = goals.iter().map(|g| Math::parse_expr(g).unwrap()).collect();
+    let goal_exprs: Vec<_> = goals.iter().map(|g| g.parse().unwrap()).collect();
 
-    let (mut egraph, root) = EGraph::from_expr(&start_expr);
+    // let (mut egraph, root) = EGraph::from_expr(&start_expr);
+    let mut egraph = EGraph::new(Meta::default());
+    let root = egraph.add_expr(&start_expr);
 
     let rules = rules();
-    let mut egraph_size = 0;
-    for i in 0..10 {
-        println!("\nIteration {}:", i);
-        println!(
-            "Size n={}, e={}",
-            egraph.total_size(),
-            egraph.number_of_classes()
-        );
+    let runner = Runner::<_, _, ()>::new(Meta::default())
+        .with_egraph(egraph)
+        .with_iter_limit(50);
+    let runner = runner.run(&rules);
+    // let mut egraph_size = 0;
+    // for i in 0..10 {
+    //     println!("\nIteration {}:", i);
+    //     println!(
+    //         "Size n={}, e={}",
+    //         egraph.total_size(),
+    //         egraph.number_of_classes()
+    //     );
 
-        let ext = Extractor::new(&egraph, MathCostFn {});
-        let best = ext.find_best(root);
-        println!("Best ({}): {}", best.cost, best.expr.pretty(40));
-        let new_size = egraph.total_size();
-        if new_size == egraph_size {
-            println!("\nEnding early because we're saturated");
-            break;
-        }
-        if new_size > size_limit {
-            println!("\nStop because size limit of {}", size_limit);
-            break;
-        }
-        egraph_size = new_size;
+    //     let ext = Extractor::new(&egraph, MathCostFn {});
+    //     let best = ext.find_best(root);
+    //     println!("Best ({}): {}", best.cost, best.expr.pretty(40));
+    //     let new_size = egraph.total_size();
+    //     if new_size == egraph_size {
+    //         println!("\nEnding early because we're saturated");
+    //         break;
+    //     }
+    //     if new_size > size_limit {
+    //         println!("\nStop because size limit of {}", size_limit);
+    //         break;
+    //     }
+    //     egraph_size = new_size;
+    // }
 
-        for rw in &rules {
-            let new = rw.run(&mut egraph).len();
-            if new > 0 {
-                println!("Fired {} {} times", rw.name, new);
-            }
-        }
-        egraph.rebuild();
-    }
-
-    egraph.dump_dot("test.dot");
+    runner
+        .egraph
+        .dot(&|_, _| true)
+        .to_png("egraph_dump.png")
+        .unwrap();
 
     for (i, (goal_expr, goal_str)) in goal_exprs.iter().zip(goals).enumerate() {
         info!("Trying to prove goal {}: {}", i, goal_str);
-        let equivs = egraph.equivs(&start_expr, &goal_expr);
+        let equivs = runner.egraph.equivs(&start_expr, &goal_expr);
         if equivs.is_empty() {
             panic!("Couldn't prove goal {}: {}", i, goal_str);
         }
@@ -271,21 +278,20 @@ fn push_mul_2() {
 fn test_extract() {
     let start = "(* (lit 1) (* (lit 1) (* (lit 1) (* (lit 1) (* (lit 1) (* (lit 1) (* (lit 1) (lit 1))))))))";
     println!("input: {:?}", start);
-    let start_expr = Math::parse_expr(start).unwrap();
-    let (mut egraph, root) = EGraph::from_expr(&start_expr);
+    let start_expr = start.parse().unwrap();
+    let mut egraph = EGraph::new(Meta::default());
+    let root = egraph.add_expr(&start_expr);
     println!("root {:?}", root);
 
     let rules = rules();
-    for _i in 1..50 {
-        for rw in &rules {
-            rw.run(&mut egraph);
-        }
-    }
+    let runner = Runner::<_, _, ()>::new(Meta::default())
+        .with_egraph(egraph)
+        .with_iter_limit(50)
+        .run(&rules);
 
-    let best = extract(egraph, &[root]);
-    for e in best {
-        println!("{}", e.pretty(80));
-    }
+    let (cost, best) = Extractor::new(&runner.egraph, MathCostFn).find_best(root);
+    println!("cost: {:?}", cost);
+    println!("best: {:?}", best.pretty(80));
 }
 
 //#[test]
@@ -295,23 +301,20 @@ fn test_extract() {
 fn la_parrot() {
     let start = "(sall (l* (l+ (lmat x 1000 500 500) (m* (lmat u 1000 1 1000) (trans (lmat v 500 1 500)))) \
                  (l+ (lmat x 1000 500 500) (m* (lmat u 1000 1 1000) (trans (lmat v 500 1 500))))))";
-    let start_expr = Math::parse_expr(start).unwrap();
-    let (mut egraph, root) = EGraph::from_expr(&start_expr);
+    let start_expr = start.parse().unwrap();
+    let mut egraph = EGraph::new(Meta::default());
+    let root = egraph.add_expr(&start_expr);
 
     let tr = trans_rules();
-    for _i in 1..10 {
-        for rw in &tr {
-            rw.run(&mut egraph);
-        }
-        egraph.rebuild();
-    }
+    let runner = Runner::<_, _, ()>::new(Meta::default())
+        .with_egraph(egraph)
+        .with_iter_limit(50)
+        .run(&tr);
 
-    let best = extract(egraph, &[root]);
-    for e in best {
-        println!("{}", e.pretty(80));
-    }
+    let best = Extractor::new(&runner.egraph, MathCostFn).find_best(root);
+    println!("best is {}", best.1.pretty(100));
 }
-
+/*
 #[test]
 fn ra_trans() {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -705,3 +708,4 @@ fn als_cg() {
         println!("{}", e.pretty(80));
     }
 }
+ */

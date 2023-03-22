@@ -234,16 +234,16 @@ impl Applier<Math, Meta> for Axpy {
         let x = subst[self.x];
         let p = subst[self.p];
         let y = subst[self.y];
-        let x_schema = egraph[x].data.as_ref().unwrap().get_schm();
-        let p_schema = egraph[p].data.as_ref().unwrap().get_schm();
-        let y_schema = egraph[y].data.as_ref().unwrap().get_schm();
+        let x_schema = egraph[x].data.schema.as_ref().unwrap().get_schm();
+        let p_schema = egraph[p].data.schema.as_ref().unwrap().get_schm();
+        let y_schema = egraph[y].data.schema.as_ref().unwrap().get_schm();
         if p_schema.is_empty() && x_schema.len() == 2 && x_schema == y_schema {
             let mut x_schema = x_schema.keys();
             let wc = "_".to_owned();
             let i = x_schema.next().unwrap_or(&wc).clone();
             let j = x_schema.next().unwrap_or(&wc).clone();
 
-            let mut bind_ij = format!(
+            let bind_ij = format!(
                 "(b+ {i} {j} (udf axpy (b- {i} {j} ?x) (b- _ _ ?p) (b- {i} {j} ?y)))",
                 i = &i,
                 j = &j
@@ -424,13 +424,7 @@ impl Applier<Math, Meta> for MOneMul {
         let y = subst[self.y];
         let new_node = Math::Mul([x, y]);
         let mul = egraph.add(new_node);
-        let mut mul_schema = egraph[mul.id]
-            .data
-            .schema
-            .as_ref()
-            .unwrap()
-            .get_schm()
-            .keys();
+        let mut mul_schema = egraph[mul].data.schema.as_ref().unwrap().get_schm().keys();
 
         if mul_schema.len() <= 2 {
             let wc = "_".to_owned();
@@ -446,7 +440,7 @@ impl Applier<Math, Meta> for MOneMul {
             .unwrap()
             .apply_one(egraph, eclass, subst);
 
-            let mut bind_ji = format!(
+            let bind_ji = format!(
                 "(b+ {j} {i} (udf m1mul (b- {j} {i} ?x) (b- {j} {i} ?y)))",
                 i = &i,
                 j = &j
@@ -1215,7 +1209,6 @@ impl Applier<Math, Meta> for RAMul {
             .filter(|&k| k != "_")
             .collect();
 
-        let mut res = vec![];
         if mul_schema.len() <= 2 {
             let wc = "_".to_owned();
             let i = mul_schema.get(0).unwrap_or(&wc).clone();
@@ -1267,6 +1260,7 @@ impl Applier<Math, Meta> for RAMul {
                 .apply_one(egraph, eclass, subst);
             }
         }
+        return vec![];
     }
 }
 
@@ -1284,7 +1278,7 @@ impl Applier<Math, Meta> for RABind {
     ) -> Vec<egg::Id> {
         let e = subst[self.e];
 
-        if let Some(Schema::Schm(schema)) = egraph[e].metadata.schema.as_ref() {
+        if let Some(Schema::Schm(schema)) = egraph[e].data.schema.as_ref() {
             let mut schema = schema.keys();
             if schema.len() <= 2 {
                 let wc = "_".to_owned();
